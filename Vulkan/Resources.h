@@ -91,13 +91,13 @@ struct DescriptorSet{
 };
 
 struct Pipeline {
-    VkShaderModule vertex_module;
-    VkShaderModule fragment_module;
+    VkShaderModule vertex_module{0};
+    VkShaderModule fragment_module{0};
 
-    VkPipeline pipeline;
-    VkPipelineLayout pipeline_layout;
+    VkPipeline pipeline{0};
+    VkPipelineLayout pipeline_layout{0};
 
-    VkExtent2D extent;
+    VkExtent2D extent{0, 0};
 };
 
 struct RenderObject {
@@ -106,4 +106,10 @@ struct RenderObject {
     std::vector<DescriptorLayout> layouts;
     std::vector<DescriptorSet> descriptors;
     Pipeline material;
+};
+
+struct LightObject{
+    LightNode* node;
+    Image shadow_map;
+    VkFramebuffer framebuffer;
 };

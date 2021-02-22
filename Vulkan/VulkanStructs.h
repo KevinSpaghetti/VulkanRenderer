@@ -451,12 +451,12 @@ DescriptorPool createDescriptorPool(const DeviceContext& context,
     if(uniform_buffers_count > 0){
         auto& size = sizes.emplace_back();
         size.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        size.descriptorCount = uniform_buffers_count;
+        size.descriptorCount = uniform_buffers_count + 4;
     }
     if(image_samplers_count > 0){
         auto& size = sizes.emplace_back();
         size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        size.descriptorCount = image_samplers_count;
+        size.descriptorCount = image_samplers_count + 4;
     }
 
     VkDescriptorPoolCreateInfo pInfo{};

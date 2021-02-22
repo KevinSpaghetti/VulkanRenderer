@@ -105,6 +105,62 @@ std::shared_ptr<ObjectNode> loadObjFile(const std::string name, const std::strin
     return std::make_shared<ObjectNode>(name, geometry, material);
 }
 
+std::shared_ptr<ObjectNode> loadPlane(const std::string name, const std::string& basedir, const std::string& filename){
+
+    tinyobj::attrib_t attrib;
+    std::vector<tinyobj::shape_t> shapes;
+    std::vector<tinyobj::material_t> materials;
+
+    std::string warn;
+    std::string errs;
+
+    std::string completeFilePath = basedir + filename;
+    tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &errs, completeFilePath.c_str(), basedir.c_str());
+
+    std::cout << warn << "\n";
+    std::cout << errs << "\n";
+
+    std::vector<VertexData> vdata(attrib.vertices.size());
+    std::vector<uint32_t> indices(shapes[0].mesh.indices.size());
+
+    for (int i = 0, j = 0; i < attrib.vertices.size(); i=i+3, ++j){
+        vdata[j].position = {
+                attrib.vertices[i],
+                attrib.vertices[i+1],
+                attrib.vertices[i+2]
+        };
+    }
+
+
+
+    for (int i = 0; i < shapes[0].mesh.indices.size(); ++i) {
+        auto index = shapes[0].mesh.indices[i];
+
+        indices[i] = index.vertex_index;
+        glm::vec2 crd = {
+                static_cast<float>(attrib.texcoords[2 * index.texcoord_index]),
+                1.0f - static_cast<float>(attrib.texcoords[2 * index.texcoord_index+1])
+        };
+
+        vdata[index.vertex_index].normal_1 = {
+                static_cast<float>(attrib.normals[3 * index.normal_index]),
+                static_cast<float>(attrib.normals[3 * index.normal_index+1]),
+                static_cast<float>(attrib.normals[3 * index.normal_index+2])
+        };
+        vdata[index.vertex_index].texcoord_1 = crd;
+    }
+
+    Geometry geometry(std::move(indices), std::move(vdata));
+
+    std::vector<char> vscode = readFile("planev.sprv");
+    std::vector<char> fscode = readFile("planef.sprv");
+
+    Material material("mt", vscode, fscode);
+
+    return std::make_shared<ObjectNode>(name, geometry, material);
+}
+
+
 void visitTree(BaseNode* root, Visitor *visitor) {
     root->accept(visitor);
     for (const auto& child : root->children()) {
@@ -124,7 +180,27 @@ int main() {
     root.addChild(camera);
 
     auto model = loadObjFile("helmet_1", "../resources/HelmetModel/", "helmet.obj");
+    auto plane = loadPlane("plane", "../resources/", "plane.obj");
+
+    plane->setTranslation({0, -1.5, 0});
     root.addChild(model);
+    root.addChild(plane);
+
+    auto light1 = std::make_shared<LightNode>(LightNode("light_1", 10.0, {1.0, 1.0, 1.0}, 20));
+    auto light2 = std::make_shared<LightNode>(LightNode("light_2", 10.0, {1.0, 1.0, 1.0}, 20));
+    auto light3 = std::make_shared<LightNode>(LightNode("light_3", 10.0, {1.0, 1.0, 1.0}, 20));
+
+    light1->setTranslation({-2.0, 1.0, 5.0});
+    light2->setTranslation({0.0, 1.0, 5.0});
+    light3->setTranslation({2.0, 1.0, 5.0});
+
+    light1->setRotation({1, 0, 0}, glm::radians(45.0f));
+    light2->setRotation({1, 0, 0}, glm::radians(45.0f));
+    light3->setRotation({1, 0, 0}, glm::radians(45.0f));
+
+    root.addChild(light1);
+    root.addChild(light2);
+    root.addChild(light3);
 
     Window window(title, width, height);
 
@@ -132,20 +208,25 @@ int main() {
 
     glm::vec3 rotation(0, 0.0, 0.0);
     glm::vec3 translation({0.0, 0.0, 5.0});
-    camera->setTranslation({0, 0, 0});
     root.toUpdate();
     glm::dvec2 start_pos{};
 
     CollectObjectsVisitor objectsVisitor;
     visitTree(&root, &objectsVisitor);
+    CollectLightsVisitor lightsVisitor;
+    visitTree(&root, &lightsVisitor);
+
     FindActiveCameraVisitor cameraVisitor;
     visitTree(&root, &cameraVisitor);
 
     std::vector<ObjectNode*> objects = objectsVisitor.collected();
+    std::vector<LightNode*> lights = lightsVisitor.collected();
+
     const CameraNode* cameraNode = cameraVisitor.collected();
 
     renderer.setCamera(cameraNode);
     renderer.load(objects);
+    renderer.setLights(lights);
 
     while(!window.windowShouldClose()) {
         window.pollEvents();

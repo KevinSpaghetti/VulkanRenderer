@@ -204,12 +204,12 @@ public:
         return mObjectMaterial;
     }
 
-
-
     std::vector<UniformSet> getUniformSets() const {
         UniformSet materialSet = mObjectMaterial.uniforms();
+        if(materialSet.uniforms.empty()){
+            return {mObjectSet};
+        }
         materialSet.slot = 1;
-
         return {mObjectSet, materialSet};
     }
 
@@ -258,9 +258,22 @@ private:
     float strength;
     glm::vec3 color;
 
+    glm::mat4 mProjection;
+
 public:
 
-    LightNode(const std::string& name, float strength, glm::vec3 color) : BaseNode(name), strength(strength), color(color) {}
+    LightNode(const std::string& name, float strength, glm::vec3 color, float side) : BaseNode(name), strength(strength), color(color) {
+        mProjection = glm::perspective(45.0, 1.0, 0.1, 1000.0);
+        mProjection[1][1] *= -1;
+    }
+
+
+    glm::mat4 getViewMatrix() const {
+        return mModelInverse;
+    }
+    glm::mat4 getProjectionMatrix() const {
+        return mProjection;
+    }
 
     void accept(Visitor* v) override {
         v->visit(this);

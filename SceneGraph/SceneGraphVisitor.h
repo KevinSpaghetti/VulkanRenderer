@@ -26,6 +26,25 @@ public:
     }
 };
 
+class CollectLightsVisitor : public Visitor {
+private:
+    std::vector<LightNode*> lights;
+
+public:
+    CollectLightsVisitor() = default;
+
+    void visit(ObjectNode* node) {};
+    void visit(BaseNode* node){};
+    void visit(LightNode* node) override {
+        lights.push_back(node);
+    };
+    void visit(CameraNode* node){};
+
+    std::vector<LightNode*> collected() const {
+        return lights;
+    }
+};
+
 
 class FindActiveCameraVisitor : public Visitor {
 private:
