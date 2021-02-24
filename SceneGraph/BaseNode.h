@@ -196,6 +196,26 @@ public:
                                         std::make_shared<glm::vec3>(1.0)};
     }
 
+    static std::map<std::string, UniformSet> getObjectSetArchetype(){
+        UniformSet objectSetArchetype;
+        objectSetArchetype.slot = 0;
+        objectSetArchetype.uniforms[0] = Uniform{TYPE_BUFFER, {4, 4, 0},
+                                         sizeof(glm::mat4),1,
+                                         std::make_shared<glm::mat4>(1.0)};
+        objectSetArchetype.uniforms[1] = Uniform{TYPE_BUFFER, {4, 4, 0},
+                                         sizeof(glm::mat4),1,
+                                         std::make_shared<glm::mat4>(1.0)};
+        objectSetArchetype.uniforms[2] = Uniform{TYPE_BUFFER, {4, 4, 0},
+                                         sizeof(glm::mat4),1,
+                                         std::make_shared<glm::mat4>(1.0)};
+        objectSetArchetype.uniforms[3] = Uniform{TYPE_BUFFER, {3, 1, 0},
+                                         sizeof(glm::vec3),1,
+                                         std::make_shared<glm::vec3>(1.0)};
+        return {{"object", objectSetArchetype},
+                {"material", Material::getMaterialSetArchetype()}};
+    }
+
+
     Geometry getGeometry() const {
         return mObjectGeometry;
     }
@@ -204,13 +224,9 @@ public:
         return mObjectMaterial;
     }
 
-    std::vector<UniformSet> getUniformSets() const {
-        UniformSet materialSet = mObjectMaterial.uniforms();
-        if(materialSet.uniforms.empty()){
-            return {mObjectSet};
-        }
-        materialSet.slot = 1;
-        return {mObjectSet, materialSet};
+    std::map<std::string, UniformSet> getUniformSets() const {
+        return {{"object", mObjectSet},
+                {"material", mObjectMaterial.uniforms()}};
     }
 
     void accept(Visitor* v) override {

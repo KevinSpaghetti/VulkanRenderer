@@ -99,7 +99,7 @@ std::shared_ptr<ObjectNode> loadObjFile(const std::string name, const std::strin
                 .data = txt.data()
         };
 
-        material.addUniform(location, uniform);
+        material.uniform(location) = uniform;
     }
 
     return std::make_shared<ObjectNode>(name, geometry, material);
@@ -130,8 +130,6 @@ std::shared_ptr<ObjectNode> loadPlane(const std::string name, const std::string&
                 attrib.vertices[i+2]
         };
     }
-
-
 
     for (int i = 0; i < shapes[0].mesh.indices.size(); ++i) {
         auto index = shapes[0].mesh.indices[i];
@@ -225,8 +223,8 @@ int main() {
     const CameraNode* cameraNode = cameraVisitor.collected();
 
     renderer.setCamera(cameraNode);
-    renderer.load(objects);
     renderer.setLights(lights);
+    renderer.load(objects);
 
     while(!window.windowShouldClose()) {
         window.pollEvents();

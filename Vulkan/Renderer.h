@@ -77,13 +77,13 @@ private:
     std::map<std::string, RenderObject> loadedObjects;
     std::map<std::string, LightObject> loadedLights;
 
-    std::vector<GeometryBuffer> loadedMeshes;
-    std::vector<Material> loadedPipelines;
-    std::vector<DescriptorLayout> loadedLayouts;
+    VkDescriptorSetLayout objectLayout;
+    VkDescriptorSetLayout materialLayout;
+    VkDescriptorSetLayout shadowMapLayout;
 
-    const CameraNode* activeCamera = nullptr;
+    const CameraNode *activeCamera = nullptr;
 
-    DescriptorPool pool;
+    std::vector<VkDescriptorPool> descriptorPools;
 
     VkPipelineLayout lightsPipelineLayout;
     VkShaderModule vshader;
@@ -92,14 +92,22 @@ private:
     VkSampler commonImageSampler;
     const uint32_t shadowMapWidth = 2048;
     const uint32_t shadowMapHeight = 2048;
-    DescriptorLayout shadowMapLayout;
-    VkDescriptorSet shadowMapSet{};
+    VkDescriptorSet shadowMapSet;
     VkBuffer lightMatrixBuffer;
     VkDeviceMemory lightMatrixMemory;
+
+    VkDescriptorPool guiPool;
 
 public:
     Renderer(const Window &window) {
         createVulkanResources(window);
+        createDescriptorPools(5);
+
+        //Every object has the same layout since every object has the same descriptor types and numbers
+        const auto archetypes = ObjectNode::getObjectSetArchetype();
+        objectLayout = createDescriptorSetLayoutForUniformSet(archetypes.at("object"));
+        materialLayout = createDescriptorSetLayoutForUniformSet(archetypes.at("material"));
+
         initImguiInstance(window);
     }
 
@@ -112,82 +120,78 @@ public:
         VkFramebuffer fill_target;
     };
 
-    void setCamera(const CameraNode* camera){
+    void setCamera(const CameraNode *camera) {
         activeCamera = camera;
     }
 
-    void load(const std::vector<ObjectNode*>& toLoad) {
+    void load(const std::vector<ObjectNode *> &toLoad) {
 
-        std::vector<ObjectNode*> notAlreadyLoadedObjects;
+        std::vector<ObjectNode *> notAlreadyLoadedObjects;
         std::copy_if(toLoad.begin(), toLoad.end(),
-                std::back_inserter(notAlreadyLoadedObjects),
-                [&](const auto& object){
-                    return !loadedObjects.contains(object->name());
-                });
-        if(notAlreadyLoadedObjects.empty()) {
-            return ;
+                     std::back_inserter(notAlreadyLoadedObjects),
+                     [&](const auto &object) {
+                         return !loadedObjects.contains(object->name());
+                     });
+        if (notAlreadyLoadedObjects.empty()) {
+            return;
         }
-
-        const DeviceContext context{m_pdevice, m_device, m_queue_info.graphics, m_queue_info.graphicsFamilyindex};
 
         std::vector<Geometry> geometries;
         std::vector<Material> materials;
         geometries.reserve(notAlreadyLoadedObjects.size());
         materials.reserve(notAlreadyLoadedObjects.size());
 
-        std::for_each(notAlreadyLoadedObjects.begin(), notAlreadyLoadedObjects.end(), [&geometries](const auto& o){ geometries.push_back(o->getGeometry());});
-        std::for_each(notAlreadyLoadedObjects.begin(), notAlreadyLoadedObjects.end(), [&materials](const auto& o){ materials.push_back(o->getMaterial());});
+        std::for_each(notAlreadyLoadedObjects.begin(), notAlreadyLoadedObjects.end(),
+                      [&geometries](const auto &o) { geometries.push_back(o->getGeometry()); });
+        std::for_each(notAlreadyLoadedObjects.begin(), notAlreadyLoadedObjects.end(),
+                      [&materials](const auto &o) { materials.push_back(o->getMaterial()); });
 
-        std::vector<GeometryBuffer> geom_buffers = createBuffers(context, geometries);
+        auto geom = createGeometries(geometries);
 
-        std::vector<std::vector<UniformSet>> objectSets(notAlreadyLoadedObjects.size());
-        std::transform(notAlreadyLoadedObjects.begin(), notAlreadyLoadedObjects.end(),
-                objectSets.begin(),
-                [](const auto& object) {return object->getUniformSets();});
+        std::vector<UniformSet> objectSets;
+        objectSets.reserve(notAlreadyLoadedObjects.size());
+        std::vector<UniformSet> materialSets;
+        materialSets.reserve(notAlreadyLoadedObjects.size());
 
-        pool = createDescriptorPool(context, objectSets);
+        std::for_each(notAlreadyLoadedObjects.begin(), notAlreadyLoadedObjects.end(), [&](const auto object) {
+            auto sets = object->getUniformSets();
+            objectSets.push_back(sets["object"]);
+            materialSets.push_back(sets["material"]);
+        });
 
-        shadowMapLayout = createShadowMapDescriptorLayout();
-        shadowMapSet = createShadowMapDescriptorSet(pool, shadowMapLayout);
+        std::vector<VkDescriptorSetLayout> layouts(notAlreadyLoadedObjects.size());
+        std::fill(layouts.begin(), layouts.end(), objectLayout);
+        const auto objectDescriptorSets = allocateDescriptorSetsFromDescriptorPools(layouts);
+        std::fill(layouts.begin(), layouts.end(), materialLayout);
+        const auto materialDescriptorSets = allocateDescriptorSetsFromDescriptorPools(layouts);
 
-        std::vector<std::vector<DescriptorLayout>> objectLayouts = createDescriptorLayouts(context, objectSets);
-        std::vector<std::vector<DescriptorSet>> objectDescriptors = createDescriptorSets(context, objectSets, objectLayouts, pool);
+        auto mats = createPipelines(materials, {objectLayout, materialLayout, shadowMapLayout});
 
-        initDescriptorSets(context, objectDescriptors);
-
-        std::vector<Pipeline> pipelines(materials.size());
-
-        for (int i = 0; i < materials.size(); ++i){
-            std::vector<VkDescriptorSetLayout> layouts;
-            std::for_each(objectLayouts[i].begin(), objectLayouts[i].end(),
-                    [&](const auto& object){ return layouts.push_back(object.layout); });
-            layouts.push_back(shadowMapLayout.layout);
-            pipelines[i] = createPipeline(context,
-                    materials[i],
-                    layouts,
-                    m_render_pass,
-                    m_swapchain_data.extent);
-        }
-
-        for(int i = 0; i < notAlreadyLoadedObjects.size(); ++i) {
+        for (int i = 0; i < notAlreadyLoadedObjects.size(); ++i) {
             Logger::log("loaded: " + notAlreadyLoadedObjects[i]->name() + "\n");
             loadedObjects.insert({
-                    notAlreadyLoadedObjects[i]->name(),
-                    RenderObject{
-                        notAlreadyLoadedObjects[i],
-                        geom_buffers[i],
-                        objectLayouts[i],
-                        objectDescriptors[i],
-                        pipelines[i],
-                    }});
+                                         notAlreadyLoadedObjects[i]->name(),
+                                         RenderObject{
+                                                 notAlreadyLoadedObjects[i],
+                                                 geom[i],
+                                                 {{0, initDescriptorSet(objectDescriptorSets[i], objectSets[i])},
+                                                  {1, initDescriptorSet(materialDescriptorSets[i], materialSets[i])}},
+                                                 mats[i],
+                                         }});
         }
 
-        for(auto& descriptors : objectDescriptors){
-            updateAllUniforms(context, descriptors);
+        const DeviceContext context{m_pdevice, m_device, m_queue_info.graphics, m_queue_info.graphicsFamilyindex};
+        for (auto& [name, object] : loadedObjects) {
+            for(auto& [key, value] : object.descriptors){
+                updateAllUniforms(context, value);
+            }
         }
     }
 
-    void setLights(const std::vector<LightNode*>& lights){
+    void setLights(const std::vector<LightNode *> &lights) {
+        shadowMapLayout = createShadowMapDescriptorLayout(lights.size());
+        shadowMapSet = createShadowMapDescriptorSet(shadowMapLayout, lights.size());
+
 
         //create the shadow maps
         VkSamplerCreateInfo info{};
@@ -213,7 +217,7 @@ public:
 
         VkFormat depthFormat = Utils::findDepthFormat(m_pdevice);
         uint32_t index = 0;
-        for(auto& light : lights){
+        for (auto &light : lights) {
             Image map{};
             Utils::createImage(m_pdevice, m_device, map.image, map.imagememory,
                                {shadowMapWidth, shadowMapHeight}, depthFormat,
@@ -225,17 +229,17 @@ public:
             map.sampler = commonImageSampler;
             loadedLights.emplace(light->name(), LightObject{light, map});
             matrices[index] = light->getProjectionMatrix() * light->getViewMatrix();
-            updateShadowMapDescriptorSet(shadowMapSet, pool, shadowMapLayout, map, index);
+            updateShadowMapDescriptorSet(shadowMapSet, map, index);
             ++index;
         }
 
         createDepthOnlyRenderPass(fill_shadow_maps, m_pdevice, m_device,
-                {shadowMapWidth, shadowMapHeight},
-                depthFormat,
-                VK_IMAGE_LAYOUT_UNDEFINED,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                                  {shadowMapWidth, shadowMapHeight},
+                                  depthFormat,
+                                  VK_IMAGE_LAYOUT_UNDEFINED,
+                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-        for (auto& [name, lightObject] : loadedLights) {
+        for (auto&[name, lightObject] : loadedLights) {
             std::vector<VkImageView> attachments{lightObject.shadow_map.imageview};
             VkFramebufferCreateInfo fbinfo{};
             fbinfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -248,51 +252,45 @@ public:
             vkCreateFramebuffer(m_device, &fbinfo, nullptr, &lightObject.framebuffer);
         }
 
-        lightsPipelineLayout = loadedObjects["helmet_1"].material.pipeline_layout;
-        VkDescriptorSetLayout dscLayout = loadedObjects["helmet_1"].layouts[0].layout;
-
         Utils::createShaderModule(m_device, vshader, Utils::readFile("lightmap.sprv"));
         Utils::createDepthOnlyPipeline(m_device, lightsPipeline,
-                {lightsPipelineLayout},
-                {dscLayout},
-                fill_shadow_maps,
-                vshader,
-                {shadowMapWidth, shadowMapHeight});
+                                       lightsPipelineLayout,
+                                       {objectLayout},
+                                       fill_shadow_maps,
+                                       vshader,
+                                       {shadowMapWidth, shadowMapHeight});
 
-        Utils::copyToMemory(m_device, lightMatrixMemory, matrices, sizeof(glm::mat4) * 3, 0);
+        const uint32_t buffer_size = sizeof(glm::mat4) * 3;
+        const uint32_t nOfLights = lights.size();
+        Utils::copyToMemory(m_device, lightMatrixMemory, matrices, buffer_size, 0);
+        Utils::copyToMemory(m_device, lightMatrixMemory, &nOfLights, sizeof(uint32_t), buffer_size);
     }
 
-    void updateUniforms(){
+    void updateUniforms() {
         const DeviceContext context{m_pdevice, m_device, m_queue_info.graphics, m_queue_info.graphicsFamilyindex};
-        for (auto& [key, object] : loadedObjects) {
-            if(object.node->toUpdate()){
+        for (auto&[key, object] : loadedObjects) {
+            if (object.node->toUpdate()) {
                 //Update object uniform
                 matrices m{};
                 m.model = object.node->modelMatrix();
                 m.view = activeCamera->getViewMatrix();
                 m.projection = activeCamera->getProjectionMatrix();
-
                 glm::vec3 cameraPosition = glm::vec3(glm::vec4(0.0, 0.0, 0.0, 1.0) * activeCamera->modelMatrix());
 
-                memcpy(object.descriptors[0].uniforms[0].data.get(), &m.model, object.descriptors[0].uniforms[0].byte_size);
-                memcpy(object.descriptors[0].uniforms[1].data.get(), &m.view, object.descriptors[0].uniforms[1].byte_size);
-                memcpy(object.descriptors[0].uniforms[2].data.get(), &m.projection, object.descriptors[0].uniforms[2].byte_size);
-                memcpy(object.descriptors[0].uniforms[3].data.get(), &cameraPosition, object.descriptors[0].uniforms[3].byte_size);
-
-                updateUniform(context, object.descriptors, 0, 0);
-                updateUniform(context, object.descriptors, 0, 1);
-                updateUniform(context, object.descriptors, 0, 2);
-                updateUniform(context, object.descriptors, 0, 3);
+                Utils::copyToMemory(m_device, object.descriptors[0].uniform_memory, &m.model, sizeof(glm::mat4), object.descriptors[0].buffersForSlot[0].offset);
+                Utils::copyToMemory(m_device, object.descriptors[0].uniform_memory, &m.view, sizeof(glm::mat4), object.descriptors[0].buffersForSlot[1].offset);
+                Utils::copyToMemory(m_device, object.descriptors[0].uniform_memory, &m.projection, sizeof(glm::mat4), object.descriptors[0].buffersForSlot[2].offset);
+                Utils::copyToMemory(m_device, object.descriptors[0].uniform_memory, &cameraPosition, sizeof(glm::vec3), object.descriptors[0].buffersForSlot[3].offset);
 
                 object.node->updated();
             }
         }
     }
 
-    void unload(const std::vector<std::string>& namesOfObjectsToUnload) {
+    void unload(const std::vector<std::string> &namesOfObjectsToUnload) {
         const DeviceContext context{m_pdevice, m_device, m_queue_info.graphics, m_queue_info.graphicsFamilyindex};
 
-        for(const auto& objectName: namesOfObjectsToUnload){
+        for (const auto &objectName: namesOfObjectsToUnload) {
             destroy(context, loadedObjects[objectName]);
             loadedObjects.erase(objectName);
             Logger::log("unloaded: " + objectName + " \n");
@@ -362,22 +360,26 @@ public:
         vkDeviceWaitIdle(m_device);
 
         const DeviceContext context{m_pdevice, m_device, m_queue_info.graphics, m_queue_info.graphicsFamilyindex};
-        for(const auto& [key, object]: loadedObjects){
+        for (const auto&[key, object]: loadedObjects) {
             destroy(context, object);
         }
-        destroy(context, pool);
+        for (auto &pool : descriptorPools) {
+            vkDestroyDescriptorPool(m_device, pool, nullptr);
+        }
 
+        vkDestroyDescriptorSetLayout(m_device, objectLayout, nullptr);
+        vkDestroyDescriptorSetLayout(m_device, materialLayout, nullptr);
         vkDestroyShaderModule(m_device, vshader, nullptr);
         vkDestroyPipelineLayout(m_device, lightsPipelineLayout, nullptr);
         vkDestroyPipeline(m_device, lightsPipeline, nullptr);
-        destroy(context, shadowMapLayout);
+        vkDestroyDescriptorSetLayout(m_device, shadowMapLayout, nullptr);
 
         vkDestroyBuffer(m_device, lightMatrixBuffer, nullptr);
         vkFreeMemory(m_device, lightMatrixMemory, nullptr);
 
         vkDestroySampler(m_device, commonImageSampler, nullptr);
 
-        for(const auto& [key, object]: loadedLights){
+        for (const auto&[key, object]: loadedLights) {
             vkDestroyImage(m_device, object.shadow_map.image, nullptr);
             vkDestroyImageView(m_device, object.shadow_map.imageview, nullptr);
             vkFreeMemory(m_device, object.shadow_map.imagememory, nullptr);
@@ -416,75 +418,246 @@ public:
 
 private:
 
-    VkDescriptorPool guiPool;
+    void createDescriptorPools(const int nOfPools) {
+        descriptorPools.reserve(nOfPools);
+        for (int i = 0; i < nOfPools; ++i) {
 
-    DescriptorLayout createShadowMapDescriptorLayout(){
-        DescriptorLayout layout{};
-        std::vector<VkDescriptorSetLayoutBinding> bindings;
-        for(int i = 0; i < 3; ++i){
-            auto& binding = bindings.emplace_back();
-            binding.binding = i;
-            binding.descriptorCount = 1;
-            binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-            binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            auto& binding2 = bindings.emplace_back();
-            binding2.binding = i+3;
-            binding2.descriptorCount = 1;
-            binding2.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-            binding2.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            const std::array<VkDescriptorPoolSize, 3> poolSizes{{
+                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 64},
+                {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 64},
+                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 64}
+            }};
+
+            VkDescriptorPoolCreateInfo pInfo{};
+            pInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            pInfo.poolSizeCount = poolSizes.size();
+            pInfo.pPoolSizes = poolSizes.data();
+            pInfo.maxSets = 64;
+            pInfo.flags = 0;
+
+            auto &pool = descriptorPools.emplace_back();
+            if (vkCreateDescriptorPool(m_device, &pInfo, nullptr, &pool) != VK_SUCCESS) {
+                throw std::runtime_error("Failed to create vertex buffer");
+            }
         }
+    }
+
+    std::vector<GeometryBuffer> createGeometries(const std::vector<Geometry> &geometries) {
+        const DeviceContext context{m_pdevice, m_device, m_queue_info.graphics, m_queue_info.graphicsFamilyindex};
+        return createBuffers(context, geometries);
+    }
+
+    std::vector<Pipeline> createPipelines(const std::vector<Material> &materials,
+                                          const std::vector<VkDescriptorSetLayout> &acceptedLayouts) {
+        const DeviceContext context{m_pdevice, m_device, m_queue_info.graphics, m_queue_info.graphicsFamilyindex};
+
+        std::vector<Pipeline> result;
+        result.reserve(materials.size());
+
+        for (int i = 0; i < materials.size(); ++i) {
+            result.push_back(createPipeline(context,
+                                            materials[i],
+                                            acceptedLayouts,
+                                            m_render_pass,
+                                            m_swapchain_data.extent));
+        }
+
+        return result;
+    }
+
+    VkDescriptorSetLayout createDescriptorSetLayoutForUniformSet(const UniformSet& set) {
+
+        std::vector<VkDescriptorSetLayoutBinding> bindings;
+        for (const auto&[slot, uniform] : set.uniforms) {
+            auto &binding = bindings.emplace_back();
+            binding.binding = slot;
+            binding.descriptorCount = 1;
+            binding.stageFlags = VK_SHADER_STAGE_ALL;
+
+            if (uniform.type == TYPE_BUFFER) {
+                binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            }
+            if (uniform.type == TYPE_IMAGE || uniform.type == TYPE_CUBEMAP) {
+                binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            }
+        }
+
+        VkDescriptorSetLayoutCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        info.bindingCount = bindings.size();
+        info.pBindings = bindings.data();
+
+        VkDescriptorSetLayout layout;
+        vkCreateDescriptorSetLayout(m_device, &info, nullptr, &layout);
+        return layout;
+    }
+
+    std::vector<VkDescriptorSet> allocateDescriptorSetsFromDescriptorPools(const std::vector<VkDescriptorSetLayout> &layouts) {
+        std::vector<VkDescriptorSet> allocatedDescriptorSets(layouts.size());
+        for (int i = 0; i < descriptorPools.size(); ++i) {
+            VkDescriptorSetAllocateInfo allocationInfo{};
+            allocationInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            allocationInfo.descriptorPool = descriptorPools[i];
+            allocationInfo.descriptorSetCount = layouts.size();
+            allocationInfo.pSetLayouts = layouts.data();
+
+            //If the allocation is succesfull then return the allocated sets otherwise check the next
+            //available pool
+            if (vkAllocateDescriptorSets(m_device, &allocationInfo, allocatedDescriptorSets.data()) == VK_SUCCESS) {
+                return allocatedDescriptorSets;
+            }
+        }
+
+        //If no pool has been able to accomodate the allocation request then
+        //no creation of new sets is possible
+        std::runtime_error("Not enough pool space to initialize layouts");
+    }
+    DescriptorSet initDescriptorSet(const VkDescriptorSet& descriptorSet, const UniformSet &uniformSet) {
+        DescriptorSet descriptor{};
+        descriptor.set = descriptorSet;
+        descriptor.uniforms = uniformSet.uniforms;
+
+        uint32_t total_uniform_size = std::accumulate(descriptor.uniforms.begin(), descriptor.uniforms.end(), 0, []
+                (const auto &acc, const auto &uniform) {
+            return acc + ((uniform.second.type == TYPE_BUFFER) ? uniform.second.byte_size * uniform.second.count : 0);
+        });
+
+        uint32_t uniform_offset = 0;
+        if (total_uniform_size > 0) {
+            Utils::createBuffer(m_device, descriptor.uniform_buffer,
+                                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                VK_SHARING_MODE_EXCLUSIVE,
+                                total_uniform_size);
+
+            total_uniform_size = Utils::allocateDeviceMemory(m_pdevice, m_device,
+                                                             descriptor.uniform_buffer, descriptor.uniform_memory,
+                                                             total_uniform_size,
+                                                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                                             VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            vkBindBufferMemory(m_device,
+                               descriptor.uniform_buffer,
+                               descriptor.uniform_memory,
+                               uniform_offset);
+        } else {
+            descriptor.uniform_buffer = VK_NULL_HANDLE;
+            descriptor.uniform_memory = VK_NULL_HANDLE;
+        }
+
+        for (const auto&[slot, uniform] : descriptor.uniforms) {
+            if (uniform.type == TYPE_BUFFER) {
+                Buffer buffer{};
+                buffer.size = uniform.byte_size;
+                buffer.offset = uniform_offset;
+                uniform_offset += uniform.byte_size;
+                descriptor.buffersForSlot[slot] = buffer;
+
+                VkDescriptorBufferInfo info{};
+                info.buffer = descriptor.uniform_buffer;
+                info.offset = descriptor.buffersForSlot[slot].offset;
+                info.range = descriptor.buffersForSlot[slot].size;
+
+                VkWriteDescriptorSet dscWrite{};
+                dscWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                dscWrite.dstSet = descriptor.set;
+                dscWrite.dstBinding = slot;
+                dscWrite.dstArrayElement = 0;
+                dscWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                dscWrite.descriptorCount = 1;
+                dscWrite.pBufferInfo = &info;
+
+                vkUpdateDescriptorSets(m_device, 1, &dscWrite, 0, nullptr);
+            }
+            if (uniform.type == TYPE_IMAGE) {
+                const DeviceContext context{m_pdevice, m_device, m_queue_info.graphics,
+                                            m_queue_info.graphicsFamilyindex};
+                descriptor.imagesForSlot[slot] = createImage(context, {uniform.size[0], uniform.size[1]});
+
+                VkDescriptorImageInfo image_info{};
+                image_info.imageView = descriptor.imagesForSlot[slot].imageview;
+                image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                image_info.sampler = descriptor.imagesForSlot[slot].sampler;
+
+                VkWriteDescriptorSet dscWrite{};
+                dscWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                dscWrite.dstSet = descriptor.set;
+                dscWrite.dstBinding = slot;
+                dscWrite.dstArrayElement = 0;
+                dscWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                dscWrite.descriptorCount = 1;
+                dscWrite.pImageInfo = &image_info;
+
+                vkUpdateDescriptorSets(context.device, 1, &dscWrite, 0, nullptr);
+            }
+        }
+
+
+        return descriptor;
+
+    }
+
+    VkDescriptorSetLayout createShadowMapDescriptorLayout(int nOfLights) {
+        VkDescriptorSetLayout layout{};
+        std::vector<VkDescriptorSetLayoutBinding> bindings;
+        auto &binding = bindings.emplace_back();
+        binding.binding = 0;
+        binding.descriptorCount = nOfLights;
+        binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        auto &binding2 = bindings.emplace_back();
+        binding2.binding = 1;
+        binding2.descriptorCount = nOfLights;
+        binding2.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        binding2.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+
         VkDescriptorSetLayoutCreateInfo lInfo{};
         lInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         lInfo.bindingCount = static_cast<uint32_t>(bindings.size());
         lInfo.pBindings = bindings.data();
-        if (vkCreateDescriptorSetLayout(m_device, &lInfo, nullptr, &layout.layout)) {
+        if (vkCreateDescriptorSetLayout(m_device, &lInfo, nullptr, &layout)) {
             throw std::runtime_error("Failed to create shader module");
         }
         return layout;
     }
+    VkDescriptorSet createShadowMapDescriptorSet(VkDescriptorSetLayout layout, const int nOfLights ) {
+        VkDescriptorSet set = allocateDescriptorSetsFromDescriptorPools({layout}).front();
 
-    VkDescriptorSet createShadowMapDescriptorSet(DescriptorPool pool, DescriptorLayout layout){
-        VkDescriptorSet set;
-
-        VkDescriptorSetAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        allocInfo.descriptorPool = pool.pool;
-        allocInfo.descriptorSetCount = 1;
-        allocInfo.pSetLayouts = &layout.layout;
-        if (vkAllocateDescriptorSets(m_device, &allocInfo, &set) != VK_SUCCESS) {
-            throw std::runtime_error("Failed to create descriptor sets");
-        }
+        const uint32_t buffer_size = nOfLights * sizeof(glm::mat4);
 
         //CReate buffers to hold the matrices
-        Utils::createBuffer(m_device, lightMatrixBuffer, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_SHARING_MODE_EXCLUSIVE, sizeof(glm::mat4)*3);
-        Utils::allocateDeviceMemory(m_pdevice, m_device, lightMatrixBuffer, lightMatrixMemory, sizeof(glm::mat4)*3, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        Utils::createBuffer(m_device, lightMatrixBuffer,
+                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                VK_SHARING_MODE_EXCLUSIVE,
+                buffer_size + sizeof(uint32_t));
+        Utils::allocateDeviceMemory(m_pdevice, m_device,
+                lightMatrixBuffer,
+                lightMatrixMemory,
+                buffer_size + sizeof(uint32_t),
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         vkBindBufferMemory(m_device, lightMatrixBuffer, lightMatrixMemory, 0);
 
-        for (int i = 0; i < 3; ++i) {
-            VkDescriptorBufferInfo binfo{};
-            binfo.buffer = lightMatrixBuffer;
-            binfo.offset = sizeof(glm::mat4) * i;
-            binfo.range = sizeof(glm::mat4);
+        for (int i = 0; i < nOfLights; ++i) {
+            VkDescriptorBufferInfo bInfoMatrixArray{};
+            bInfoMatrixArray.buffer = lightMatrixBuffer;
+            bInfoMatrixArray.offset = 0;
+            bInfoMatrixArray.range = buffer_size;
 
-            VkWriteDescriptorSet dscWrite{};
-            dscWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            dscWrite.dstSet = set;
-            dscWrite.dstBinding = i+3;
-            dscWrite.dstArrayElement = 0;
-            dscWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            dscWrite.descriptorCount = 1;
-            dscWrite.pBufferInfo = &binfo;
+            VkWriteDescriptorSet dscWriteMatrixArray{};
+            dscWriteMatrixArray.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            dscWriteMatrixArray.dstSet = set;
+            dscWriteMatrixArray.dstBinding = 0;
+            dscWriteMatrixArray.dstArrayElement = i;
+            dscWriteMatrixArray.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            dscWriteMatrixArray.descriptorCount = 1;
+            dscWriteMatrixArray.pBufferInfo = &bInfoMatrixArray;
 
-            vkUpdateDescriptorSets(m_device, 1, &dscWrite, 0, nullptr);
-
+            vkUpdateDescriptorSets(m_device, 1, &dscWriteMatrixArray, 0, nullptr);
         }
 
         return set;
     }
-    void updateShadowMapDescriptorSet(VkDescriptorSet set, DescriptorPool pool,
-            DescriptorLayout layout,
-            Image image,
-            uint32_t index){
+    void updateShadowMapDescriptorSet(VkDescriptorSet set,
+                                      Image image,
+                                      uint32_t index) {
 
         VkDescriptorImageInfo image_info;
         image_info.imageView = image.imageview;
@@ -494,8 +667,8 @@ private:
         VkWriteDescriptorSet dscWrite{};
         dscWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         dscWrite.dstSet = set;
-        dscWrite.dstBinding = index;
-        dscWrite.dstArrayElement = 0;
+        dscWrite.dstBinding = 1;
+        dscWrite.dstArrayElement = index;
         dscWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         dscWrite.descriptorCount = 1;
         dscWrite.pImageInfo = &image_info;
@@ -601,9 +774,12 @@ private:
             throw std::runtime_error("Logical device creation failed");
         }
 
-        vkGetDeviceQueue(m_device, m_queue_info.graphicsFamilyindex, m_queue_info.graphicsQueueIndex, &m_queue_info.graphics);
-        vkGetDeviceQueue(m_device, m_queue_info.transferFamilyindex, m_queue_info.transferQueueIndex, &m_queue_info.transfer);
-        vkGetDeviceQueue(m_device, m_queue_info.computeFamilyindex, m_queue_info.computeQueueIndex, &m_queue_info.compute);
+        vkGetDeviceQueue(m_device, m_queue_info.graphicsFamilyindex, m_queue_info.graphicsQueueIndex,
+                         &m_queue_info.graphics);
+        vkGetDeviceQueue(m_device, m_queue_info.transferFamilyindex, m_queue_info.transferQueueIndex,
+                         &m_queue_info.transfer);
+        vkGetDeviceQueue(m_device, m_queue_info.computeFamilyindex, m_queue_info.computeQueueIndex,
+                         &m_queue_info.compute);
 
         if (glfwCreateWindowSurface(m_instance_data.instance, window.getWindowHandle(), nullptr, &m_surface) !=
             VK_SUCCESS) {
@@ -692,27 +868,27 @@ private:
 
     }
 
-    void initImguiInstance(const Window& window){
+    void initImguiInstance(const Window &window) {
         assert(m_instance_data.instance != VK_NULL_HANDLE);
 
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
-        ImGuiIO& io = ImGui::GetIO();
+        ImGuiIO &io = ImGui::GetIO();
 
         ImGui::StyleColorsDark();
 
         const std::array<VkDescriptorPoolSize, 11> imgui_pool_sizes{{
-                                                                            { VK_DESCRIPTOR_TYPE_SAMPLER, 1000 },
-                                                                            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000 },
-                                                                            { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000 },
-                                                                            { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1000 },
-                                                                            { VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 1000 },
-                                                                            { VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1000 },
-                                                                            { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1000 },
-                                                                            { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1000 },
-                                                                            { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1000 },
-                                                                            { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1000 },
-                                                                            { VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1000 }
+                                                                            {VK_DESCRIPTOR_TYPE_SAMPLER, 1000},
+                                                                            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000},
+                                                                            {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000},
+                                                                            {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1000},
+                                                                            {VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 1000},
+                                                                            {VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1000},
+                                                                            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1000},
+                                                                            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1000},
+                                                                            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1000},
+                                                                            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1000},
+                                                                            {VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1000}
                                                                     }};
 
         VkDescriptorPoolCreateInfo pinfo{};
@@ -894,12 +1070,12 @@ private:
 
 
     void createDepthOnlyRenderPass(VkRenderPass &render_pass,
-                          const VkPhysicalDevice &pdevice,
-                          const VkDevice &device,
-                          const VkExtent2D &extent,
-                          const VkFormat depth_format,
-                          const VkImageLayout depth_attachment_initial_layout = VK_IMAGE_LAYOUT_UNDEFINED,
-                          const VkImageLayout depth_attachment_final_layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+                                   const VkPhysicalDevice &pdevice,
+                                   const VkDevice &device,
+                                   const VkExtent2D &extent,
+                                   const VkFormat depth_format,
+                                   const VkImageLayout depth_attachment_initial_layout = VK_IMAGE_LAYOUT_UNDEFINED,
+                                   const VkImageLayout depth_attachment_final_layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
 
         VkAttachmentDescription depthAttachment{};
         depthAttachment.format = depth_format;
@@ -1013,7 +1189,7 @@ private:
                 {{1.0f, 0.0f}}
         };
 
-        for (const auto& [name, light] : loadedLights) {
+        for (const auto&[name, light] : loadedLights) {
 
             VkRenderPassBeginInfo render_to_target_info{};
             render_to_target_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1036,17 +1212,15 @@ private:
                         light.node->getViewMatrix(),
                         light.node->getProjectionMatrix()
                 };
-                vkCmdPushConstants(command, object.material.pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(OInfo), &objectInfo);
+                vkCmdPushConstants(command, object.pipeline.pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                                   sizeof(OInfo), &objectInfo);
 
-                std::vector<VkDescriptorSet> sets(object.descriptors.size());
-                std::transform(object.descriptors.begin(), object.descriptors.end(), sets.begin(),
-                               [](const auto &o) { return o.set; });
-
+                const VkDescriptorSet objectSet = object.descriptors.at(0).set;
                 vkCmdBindDescriptorSets(command,
                                         VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                        object.material.pipeline_layout,
+                                        object.pipeline.pipeline_layout,
                                         0, 1,
-                                        sets.data(),
+                                        &objectSet,
                                         0, 0);
 
                 VkDeviceSize offsets[1] = {object.geometry.vertices_offset};
@@ -1080,29 +1254,29 @@ private:
         renderpassbegininfo.pClearValues = clearVals.data();
 
 
-
         vkCmdBeginRenderPass(command, &renderpassbegininfo, VK_SUBPASS_CONTENTS_INLINE);
-        for (const auto& [name, object]  : loadedObjects) {
+        for (const auto&[name, object]  : loadedObjects) {
 
             vkCmdBindPipeline(command,
                               VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              object.material.pipeline);
+                              object.pipeline.pipeline);
 
             glm::vec3 cameraPosition = glm::vec3(glm::vec4(0.0, 0.0, 0.0, 1.0) * activeCamera->modelMatrix());
             OInfo objectInfo{
-                activeCamera->getViewMatrix(),
-                activeCamera->getProjectionMatrix(),
+                    activeCamera->getViewMatrix(),
+                    activeCamera->getProjectionMatrix(),
             };
-            vkCmdPushConstants(command, object.material.pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(OInfo), &objectInfo);
+            vkCmdPushConstants(command, object.pipeline.pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(OInfo),
+                               &objectInfo);
 
             std::vector<VkDescriptorSet> sets(object.descriptors.size());
             std::transform(object.descriptors.begin(), object.descriptors.end(), sets.begin(),
-                    [](const auto& o) { return o.set;} );
+                           [](const auto &o) { return o.second.set; });
 
             sets.push_back(shadowMapSet);
             vkCmdBindDescriptorSets(command,
                                     VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    object.material.pipeline_layout,
+                                    object.pipeline.pipeline_layout,
                                     0, sets.size(),
                                     sets.data(),
                                     0, 0);
@@ -1135,4 +1309,4 @@ private:
 
         vkCmdEndRenderPass(command);
     }
-};                       
+};                     

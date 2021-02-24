@@ -78,7 +78,6 @@ struct DescriptorPool{
 };
 
 struct DescriptorSet{
-    uint32_t slot;
     VkDescriptorSet set;
 
     std::map<uint32_t, Uniform> uniforms;
@@ -103,9 +102,8 @@ struct Pipeline {
 struct RenderObject {
     ObjectNode* node;
     GeometryBuffer geometry;
-    std::vector<DescriptorLayout> layouts;
-    std::vector<DescriptorSet> descriptors;
-    Pipeline material;
+    std::map<uint32_t, DescriptorSet> descriptors;
+    Pipeline pipeline;
 };
 
 struct LightObject{

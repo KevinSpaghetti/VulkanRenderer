@@ -426,52 +426,6 @@ void uploadCubemapData(const DeviceContext& context,
 }
 */
 
-DescriptorPool createDescriptorPool(const DeviceContext& context,
-        const std::vector<std::vector<UniformSet>>& sets) {
-
-    DescriptorPool result{};
-
-    uint32_t uniform_buffers_count = 0;
-    uint32_t image_samplers_count = 0;
-
-    std::for_each(sets.begin(), sets.end(), [&](const auto& set){
-        for(const auto& uniformSet : set){
-            for(const auto& [key, uniform] : uniformSet.uniforms){
-                if(uniform.type == TYPE_BUFFER){
-                    ++uniform_buffers_count;
-                }
-                if(uniform.type == TYPE_IMAGE || uniform.type == TYPE_CUBEMAP){
-                    ++image_samplers_count;
-                }
-            }
-        }
-    });
-
-    std::vector<VkDescriptorPoolSize> sizes;
-    if(uniform_buffers_count > 0){
-        auto& size = sizes.emplace_back();
-        size.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        size.descriptorCount = uniform_buffers_count + 4;
-    }
-    if(image_samplers_count > 0){
-        auto& size = sizes.emplace_back();
-        size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        size.descriptorCount = image_samplers_count + 4;
-    }
-
-    VkDescriptorPoolCreateInfo pInfo{};
-    pInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pInfo.poolSizeCount = sizes.size();
-    pInfo.pPoolSizes = sizes.data();
-    pInfo.maxSets = 64;
-
-    if (vkCreateDescriptorPool(context.device, &pInfo, nullptr, &result.pool) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create vertex buffer");
-    }
-
-    return result;
-}
-
 DescriptorLayout createDescriptorLayout(const DeviceContext& context,
         const UniformSet& set){
 
@@ -513,39 +467,6 @@ std::vector<std::vector<DescriptorLayout>> createDescriptorLayouts(const DeviceC
     }
 
     return descLayouts;
-}
-std::vector<std::vector<DescriptorSet>> createDescriptorSets(const DeviceContext& context,
-        const std::vector<std::vector<UniformSet>>& sets,
-        const std::vector<std::vector<DescriptorLayout>>& layouts,
-        const DescriptorPool pool){
-
-    std::vector<std::vector<DescriptorSet>> descSets(sets.size());
-
-    for (int i = 0; i < sets.size(); ++i) {
-        const auto& uset = sets[i];
-        const auto& desc_layouts = layouts[i];
-        for (int j = 0; j < uset.size(); ++j) {
-            if(!uset[j].uniforms.empty()){
-                const auto& uniform_set = uset[j];
-                const auto& descriptor_layout = desc_layouts[j];
-                DescriptorSet d;
-                VkDescriptorSetAllocateInfo allocInfo{};
-                allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-                allocInfo.descriptorPool = pool.pool;
-                allocInfo.descriptorSetCount = 1;
-                allocInfo.pSetLayouts = &descriptor_layout.layout;
-                if (vkAllocateDescriptorSets(context.device, &allocInfo, &d.set) != VK_SUCCESS) {
-                    throw std::runtime_error("Failed to create descriptor sets");
-                }
-                d.slot = uset[j].slot;
-                d.uniforms = uset[j].uniforms;
-                descSets[i].push_back(d);
-            }
-
-        }
-    }
-
-    return descSets;
 }
 
 //Init the buffers and the images for the descriptor sets
@@ -672,42 +593,21 @@ std::vector<Pipeline> createPipelines(const DeviceContext& context,
     return pipelines;
 }
 
-//Turn descriptor into a map of [slot, descriptor]
-void updateUniform(const DeviceContext context,
-        std::vector<DescriptorSet>& descriptors,
-        const uint32_t descriptorSlot,
-        const uint32_t uniformSlot){
-
-    for (const auto& descriptor : descriptors) {
-        if(descriptor.slot == descriptorSlot){
-            const auto& uniform = descriptor.uniforms.at(uniformSlot);
-            if(uniform.type == TYPE_BUFFER){
-                const auto& buffer = descriptor.buffersForSlot.at(uniformSlot);
-                Utils::copyToMemory(context.device, descriptor.uniform_memory,
-                        descriptor.uniforms.at(uniformSlot).data.get(), buffer.size, buffer.offset);
-            }
-            if(uniform.type == TYPE_IMAGE){
-                const auto& image = descriptor.imagesForSlot.at(uniformSlot);
-                uploadImageData(context, {image}, {descriptor.uniforms.at(uniformSlot).data.get()}, {uniform.size}, {uniform.byte_size});
-            }
-        }
-    }
-
-}
 
 void updateAllUniforms(const DeviceContext context,
-        std::vector<DescriptorSet>& descriptors){
-    for (const auto& descriptor : descriptors) {
-        for(const auto& [slot, uniform] : descriptor.uniforms){
-            if(uniform.type == TYPE_BUFFER){
+        DescriptorSet& descriptor){
+
+    for(const auto& [slot, uniform] : descriptor.uniforms){
+        if(uniform.type == TYPE_BUFFER){
+            if(descriptor.uniform_buffer != VK_NULL_HANDLE){
                 const auto& buffer = descriptor.buffersForSlot.at(slot);
                 Utils::copyToMemory(context.device, descriptor.uniform_memory,
-                                    descriptor.uniforms.at(slot).data.get(), buffer.size, buffer.offset);
+                                descriptor.uniforms.at(slot).data.get(), buffer.size, buffer.offset);
             }
-            if(uniform.type == TYPE_IMAGE){
-                const auto& image = descriptor.imagesForSlot.at(slot);
-                uploadImageData(context, {image}, {descriptor.uniforms.at(slot).data.get()}, {uniform.size}, {uniform.byte_size});
-            }
+        }
+        if(uniform.type == TYPE_IMAGE){
+            const auto& image = descriptor.imagesForSlot.at(slot);
+            uploadImageData(context, {image}, {descriptor.uniforms.at(slot).data.get()}, {uniform.size}, {uniform.byte_size});
         }
     }
 }
@@ -747,11 +647,8 @@ void destroy(const DeviceContext& context, const Pipeline& pipeline){
 }
 void destroy(const DeviceContext& context, const RenderObject& object) {
     destroy(context, object.geometry);
-    std::for_each(object.layouts.begin(), object.layouts.end(), [&](const auto &layout) {
-        destroy(context, layout);
-    });
     std::for_each(object.descriptors.begin(), object.descriptors.end(), [&](const auto &descriptor) {
-        destroy(context, descriptor);
+        destroy(context, descriptor.second);
     });
-    destroy(context, object.material);
+    destroy(context, object.pipeline);
 }
