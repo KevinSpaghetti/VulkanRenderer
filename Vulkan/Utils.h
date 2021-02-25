@@ -318,6 +318,21 @@ public:
         return memory_type_index;
     }
 
+    static std::vector<char> readFile(const std::string filepath){
+        std::ifstream file(filepath, std::ios::ate | std::ios::binary);
+        if (!file.is_open()) {
+            throw std::runtime_error("File not found");
+        }
+
+        size_t fileSize = (size_t) file.tellg();
+        std::vector<char> code(fileSize);
+        file.seekg(0);
+        file.read(code.data(), fileSize);
+        file.close();
+
+        return code;
+    }
+
     static int findMemoryTypeIndexForImage(const VkPhysicalDevice pdevice,
                                            const VkDevice device,
                                            const VkImage &image,
@@ -729,19 +744,4 @@ public:
         }
     }
 
-
-    static std::vector<char> readFile(const std::string filepath){
-        std::ifstream file(filepath, std::ios::ate | std::ios::binary);
-        if (!file.is_open()) {
-            throw std::runtime_error("File not found");
-        }
-
-        size_t fileSize = (size_t) file.tellg();
-        std::vector<char> code(fileSize);
-        file.seekg(0);
-        file.read(code.data(), fileSize);
-        file.close();
-
-        return code;
-    }
 };
