@@ -4,7 +4,7 @@ project(Renderer)
 set(CMAKE_CXX_STANDARD 20)
 find_package(Vulkan REQUIRED)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W4")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -W")
 
 include_directories(libs/imgui libs/imgui/backends)
 
