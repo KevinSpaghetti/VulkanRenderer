@@ -7,6 +7,7 @@
 #include <string>
 #include <glm/vec2.hpp>
 #include <stdexcept>
+#include <memory>
 
 struct Sampler{
     int minFilter;
