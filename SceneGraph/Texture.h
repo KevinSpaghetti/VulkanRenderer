@@ -25,9 +25,8 @@ private:
 
 public:
 
-    Texture2D() {}
-    Texture2D(glm::ivec2 size, int channels,
-            unsigned char* data) :
+    Texture2D() = default;
+    Texture2D(glm::ivec2 size, int channels, unsigned char* data) :
         m_image_size(size),
         m_image_channels(channels),
         m_image_data(data){}

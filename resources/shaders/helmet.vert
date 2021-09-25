@@ -10,8 +10,12 @@ layout(location = 4) in vec2 inTexcoord_2;
 layout(set = 0, binding = 0) uniform mmodel{ mat4 model; };
 layout(set = 0, binding = 1) uniform mview{ mat4 view; };
 layout(set = 0, binding = 2) uniform mprojection{ mat4 projection; };
-
 layout(set = 0, binding = 3) uniform mposition { vec3 cameraPosition; };
+
+layout(std430, push_constant) uniform pconstants {
+    mat4 view;
+    mat4 projection;
+} constants;
 
 //Material level data
 layout(location = 0) out vec3 outNormal;
@@ -22,13 +26,13 @@ layout(location = 4) out vec3 outPos;
 layout(location = 5) out mat4 outViewMatrix;
 
 void main() {
-    outPos = vec3(view * model * vec4(inPosition, 1.0));
+    outPos = vec3(constants.view * model * vec4(inPosition, 1.0));
     outWorldPos = vec3(model * vec4(inPosition, 1.0));
 
     outCameraPos = cameraPosition;
-    outNormal = (transpose(inverse(view * model)) * vec4(inNormal, 0.0)).xyz;
+    outNormal = (transpose(inverse(constants.view * model)) * vec4(inNormal, 0.0)).xyz;
     outUv = inTexcoord_1;
-    outViewMatrix = view;
+    outViewMatrix = constants.view;
 
-    gl_Position = projection * view * model * vec4(inPosition, 1.0);
+    gl_Position = constants.projection * constants.view * model * vec4(inPosition, 1.0);
 }

@@ -14,7 +14,6 @@ layout(set = 1, binding = 0) uniform sampler2D albedoTexture;
 layout(set = 1, binding = 1) uniform sampler2D normalTexture;
 layout(set = 1, binding = 2) uniform sampler2D specularTexture;
 layout(set = 1, binding = 3) uniform sampler2D emissiveTexture;
-layout(set = 1, binding = 4) uniform samplerCube envmap;
 
 // constant light position, only one light source for testing (treated as point light)
 const vec3 lightPosition = vec3(0, 3, 2);
@@ -64,7 +63,6 @@ vec3 inverseTransformDirection( in vec3 dir, in mat4 matrix ) {
 }
 
 void main(){
-
     vec3 n = normalize(inNormal);  // interpolation destroys normalization, so we have to normalize
     vec3 v = normalize(-inPos);
     vec3 worldN = inverseTransformDirection(n, inViewMatrix );

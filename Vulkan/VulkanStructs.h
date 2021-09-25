@@ -38,7 +38,6 @@ GeometryBuffer createBuffer(const DeviceContext& context,
     Utils::copyToMemory(context.device, buffer.memory, geometry.vertices().data(),
             buffer.vertices_size, buffer.vertices_offset);
 
-
     return buffer;
 }
 std::vector<GeometryBuffer> createBuffers(const DeviceContext& context,

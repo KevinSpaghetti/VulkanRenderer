@@ -3,14 +3,13 @@
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <chrono>
-#include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include "Window.h"
 #include "Vulkan/Renderer.h"
 #define STB_IMAGE_IMPLEMENTATION
 #include "libs/stbi_image.h"
 
-Texture2D load(const std::string filepath){
+Texture2D load(const std::string& filepath){
     glm::ivec2 size;
     int channels;
 
@@ -22,7 +21,7 @@ Texture2D load(const std::string filepath){
     return Texture2D();
 }
 
-std::vector<char> readFile(const std::string filepath){
+std::vector<char> readFile(const std::string& filepath){
     std::ifstream file(filepath, std::ios::ate | std::ios::binary);
     if (!file.is_open()) {
         throw std::runtime_error("File not found");
@@ -37,7 +36,7 @@ std::vector<char> readFile(const std::string filepath){
     return code;
 }
 
-std::shared_ptr<ObjectNode> loadObjFile(const std::string name, const std::string& basedir, const std::string& filename){
+std::shared_ptr<ObjectNode> loadObjFile(const std::string& name, const std::string& basedir, const std::string& filename){
 
     tinyobj::attrib_t attrib;
     std::vector<tinyobj::shape_t> shapes;
@@ -105,7 +104,7 @@ std::shared_ptr<ObjectNode> loadObjFile(const std::string name, const std::strin
     return std::make_shared<ObjectNode>(name, geometry, material);
 }
 
-std::shared_ptr<ObjectNode> loadPlane(const std::string name, const std::string& basedir, const std::string& filename){
+std::shared_ptr<ObjectNode> loadPlane(const std::string& name, const std::string& basedir, const std::string& filename){
 
     tinyobj::attrib_t attrib;
     std::vector<tinyobj::shape_t> shapes;
@@ -157,7 +156,6 @@ std::shared_ptr<ObjectNode> loadPlane(const std::string name, const std::string&
 
     return std::make_shared<ObjectNode>(name, geometry, material);
 }
-
 
 void visitTree(BaseNode* root, Visitor *visitor) {
     root->accept(visitor);
@@ -248,14 +246,14 @@ int main() {
             const glm::vec2 rotation_angle_max = {90.0, 90.0};
 
             glm::dvec2 pos;
-            int width, height;
+            int w_width, w_height;
             glfwGetCursorPos(wd, &pos.x, &pos.y);
-            glfwGetWindowSize(wd, &width, &height);
+            glfwGetWindowSize(wd, &w_width, &w_height);
 
             glm::vec2 delta = pos - start_pos;
             glm::vec2 wsize = {
-                    static_cast<float>(width),
-                    static_cast<float>(height)};
+                    static_cast<float>(w_width),
+                    static_cast<float>(w_height)};
             glm::vec2 norm_delta = delta / wsize;
 
             glm::vec2 rot = glm::mix(rotation_angle_min, rotation_angle_max, norm_delta);
@@ -266,11 +264,12 @@ int main() {
             start_pos = pos;
 
         }else{
+            rotation.y -= (3.14 / 5.0);
             glfwGetCursorPos(wd, &start_pos.x, &start_pos.y);
         }
         if(glfwGetKey(wd, GLFW_KEY_SPACE) == GLFW_PRESS){
             rotation = glm::vec4(0.0);
-            translation = glm::vec3({0, 0, 0.0});
+            translation = glm::vec3({0, 0, 5.0});
         }
 
         camera->setTranslation(translation);
@@ -283,8 +282,9 @@ int main() {
         renderer.render();
     }
 
-    std::vector<std::string> names(objects.size());
-    std::transform(objects.begin(), objects.end(), names.begin(), [](const auto& object){
+    std::vector<std::string> names;
+    names.reserve(objects.size());
+    std::transform(objects.begin(), objects.end(), std::back_inserter(names), [](const auto& object){
         return object->name();
     });
     renderer.unload(names);
