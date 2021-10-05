@@ -318,7 +318,7 @@ public:
         return memory_type_index;
     }
 
-    static std::vector<char> readFile(const std::string filepath){
+    static std::vector<char> readFile(const std::string& filepath){
         std::ifstream file(filepath, std::ios::ate | std::ios::binary);
         if (!file.is_open()) {
             throw std::runtime_error("File not found");
@@ -368,7 +368,7 @@ public:
 
     static void createShaderModule(const VkDevice device,
                                    VkShaderModule &module,
-                                   const std::vector<char> shader_code) {
+                                   const std::vector<char>& shader_code) {
         VkShaderModuleCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
         info.codeSize = shader_code.size();

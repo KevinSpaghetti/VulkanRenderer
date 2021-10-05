@@ -149,7 +149,7 @@ std::shared_ptr<ObjectNode> loadPlane(const std::string& name, const std::string
 
     Geometry geometry(std::move(indices), std::move(vdata));
 
-    std::vector<char> vscode = readFile("vert.sprv");
+    std::vector<char> vscode = readFile("planev.sprv");
     std::vector<char> fscode = readFile("planef.sprv");
 
     Material material("mt", vscode, fscode);

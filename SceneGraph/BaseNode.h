@@ -176,11 +176,11 @@ private:
 
 public:
     ObjectNode(const std::string name,
-            const Geometry geometry,
-            const Material material) :
+            Geometry geometry,
+            Material material) :
             BaseNode(name),
-            mObjectGeometry(geometry),
-            mObjectMaterial(material){
+            mObjectGeometry(std::move(geometry)),
+            mObjectMaterial(std::move(material)){
         mObjectSet.slot = 0;
         mObjectSet.uniforms[0] = Uniform{TYPE_BUFFER, {4, 4, 0},
                                         sizeof(glm::mat4),1,
@@ -214,7 +214,6 @@ public:
         return {{"object", objectSetArchetype},
                 {"material", Material::getMaterialSetArchetype()}};
     }
-
 
     Geometry getGeometry() const {
         return mObjectGeometry;
